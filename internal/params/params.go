@@ -7,8 +7,9 @@ import (
 )
 
 const (
-	PathDesc        = "path relative to repo root"
-	FileContentDesc = "literal file text, not base64"
+	PathDesc         = "path relative to repo root"
+	FileContentDesc  = "literal file text (default) or base64-encoded bytes when encoding is base64"
+	FileEncodingDesc = "content encoding"
 )
 
 // GetString extracts a required string parameter. Empty strings are treated as missing.

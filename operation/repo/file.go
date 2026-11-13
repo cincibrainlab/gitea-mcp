@@ -76,6 +76,7 @@ var (
 		tool.String("repo", tool.Required()),
 		tool.String("path", tool.Description(params.PathDesc)),
 		tool.String("content", tool.Description(params.FileContentDesc)),
+		tool.String("encoding", tool.Description(params.FileEncodingDesc), tool.Default("utf-8"), tool.Enum("utf-8", "base64")),
 		tool.String("message", tool.Required(), tool.Description("commit message")),
 		tool.String("branch_name", tool.Required(), tool.Description("branch to commit to")),
 		tool.String("sha", tool.Description("existing file SHA (omit to create)")),
@@ -86,6 +87,7 @@ var (
 			"properties": map[string]any{
 				"path":      map[string]any{"type": "string", "description": params.PathDesc},
 				"content":   map[string]any{"type": "string", "description": params.FileContentDesc},
+				"encoding":  map[string]any{"type": "string", "description": params.FileEncodingDesc, "default": "utf-8", "enum": []string{"utf-8", "base64"}},
 				"edits":     map[string]any{"type": "array", "items": fileEditSchema},
 				"sha":       map[string]any{"type": "string", "description": "existing file SHA, of from_path when renaming (omit to create)"},
 				"from_path": map[string]any{"type": "string", "description": "rename source"},
@@ -357,6 +359,7 @@ func changeFileOperation(ctx context.Context, client *gitea_sdk.Client, owner, r
 		return nil, err
 	}
 	content, hasContent := file["content"].(string)
+	encoding := params.GetOptionalString(file, "encoding", "utf-8")
 	sha, _ := file["sha"].(string)
 	fromPath, _ := file["from_path"].(string)
 	edits, _ := file["edits"].([]any)
@@ -397,10 +400,22 @@ func changeFileOperation(ctx context.Context, client *gitea_sdk.Client, owner, r
 		return nil, fmt.Errorf("%s: sha is required", filePath)
 	}
 
+	encodedContent := base64.StdEncoding.EncodeToString([]byte(content))
+	switch encoding {
+	case "utf-8":
+	case "base64":
+		if _, err := base64.StdEncoding.Strict().DecodeString(content); err != nil {
+			return nil, fmt.Errorf("%s: invalid base64 content: %w", filePath, err)
+		}
+		encodedContent = content
+	default:
+		return nil, fmt.Errorf("%s: unsupported encoding %q", filePath, encoding)
+	}
+
 	return &gitea_sdk.ChangeFileOperation{
 		Operation: operation,
 		Path:      filePath,
-		Content:   base64.StdEncoding.EncodeToString([]byte(content)),
+		Content:   encodedContent,
 		SHA:       sha,
 		FromPath:  fromPath,
 	}, nil

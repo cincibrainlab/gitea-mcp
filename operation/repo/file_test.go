@@ -1,6 +1,7 @@
 package repo
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -73,12 +74,15 @@ func TestCreateOrUpdateFileFn(t *testing.T) {
 		mu.Unlock()
 	})
 	encoded := func(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
+	binaryContent := []byte{0x00, 0xff, '%', 'P', 'D', 'F'}
+	binaryBase64 := base64.StdEncoding.EncodeToString(binaryContent)
 
 	for _, tc := range []struct {
 		name      string
 		args      map[string]any
 		wantFiles []any
 		wantErr   string
+		wantRaw   []byte
 	}{
 		{
 			name:      "update",
@@ -94,6 +98,25 @@ func TestCreateOrUpdateFileFn(t *testing.T) {
 				map[string]any{"operation": "create", "path": "a.txt", "content": encoded("hello")},
 				map[string]any{"operation": "update", "path": "b.txt", "content": encoded("hello gitea\n"), "sha": "sha-b.txt"},
 			},
+		},
+		{
+			name:      "explicit utf-8",
+			args:      map[string]any{"path": "a.txt", "content": "hello", "encoding": "utf-8"},
+			wantFiles: []any{map[string]any{"operation": "create", "path": "a.txt", "content": encoded("hello")}},
+		},
+		{
+			name:      "base64 top-level content",
+			args:      map[string]any{"path": "a.pdf", "content": binaryBase64, "encoding": "base64"},
+			wantFiles: []any{map[string]any{"operation": "create", "path": "a.pdf", "content": binaryBase64}},
+			wantRaw:   binaryContent,
+		},
+		{
+			name: "base64 batch content",
+			args: map[string]any{"files": []any{
+				map[string]any{"path": "a.pdf", "content": binaryBase64, "encoding": "base64"},
+			}},
+			wantFiles: []any{map[string]any{"operation": "create", "path": "a.pdf", "content": binaryBase64}},
+			wantRaw:   binaryContent,
 		},
 		{
 			name: "rename and delete in one commit",
@@ -131,6 +154,8 @@ func TestCreateOrUpdateFileFn(t *testing.T) {
 			args:    map[string]any{"files": []any{map[string]any{"path": "b.txt", "edits": []any{map[string]any{"old_string": "nope", "new_string": "x"}}}}},
 			wantErr: "b.txt: edit 1: old_string not found",
 		},
+		{name: "invalid base64", args: map[string]any{"path": "a.pdf", "content": "%%%", "encoding": "base64"}, wantErr: "a.pdf: invalid base64 content"},
+		{name: "unsupported encoding", args: map[string]any{"path": "a.pdf", "content": "hello", "encoding": "hex"}, wantErr: "a.pdf: unsupported encoding \"hex\""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mu.Lock()
@@ -148,6 +173,11 @@ func TestCreateOrUpdateFileFn(t *testing.T) {
 				if !result.IsError || !strings.Contains(text, tc.wantErr) {
 					t.Fatalf("result = %s, want error containing %q", text, tc.wantErr)
 				}
+				mu.Lock()
+				defer mu.Unlock()
+				if gotBody != nil {
+					t.Fatalf("unexpected change request: %v", gotBody)
+				}
 				return
 			}
 
@@ -158,6 +188,13 @@ func TestCreateOrUpdateFileFn(t *testing.T) {
 			}
 			if !reflect.DeepEqual(gotBody["files"], tc.wantFiles) {
 				t.Fatalf("files = %v, want %v", gotBody["files"], tc.wantFiles)
+			}
+			if tc.wantRaw != nil {
+				content := gotBody["files"].([]any)[0].(map[string]any)["content"].(string)
+				decoded, err := base64.StdEncoding.DecodeString(content)
+				if err != nil || !bytes.Equal(decoded, tc.wantRaw) {
+					t.Fatalf("decoded content = %x, %v, want %x", decoded, err, tc.wantRaw)
+				}
 			}
 			if !strings.Contains(text, "to branch feature-x") {
 				t.Fatalf("result = %s, want it to name branch feature-x", text)
